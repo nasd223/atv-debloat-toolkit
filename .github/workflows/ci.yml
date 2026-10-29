@@ -77,6 +77,12 @@ jobs:
         python:
           - '3.10'
           - '3.14'
+        exclude:
+          # setup-python's Intel macOS 3.10 build pairs Tk 8.5 headers with the
+          # Tk 8.6 library, so tkinter can't open windows ("tk.h version (8.5)
+          # doesn't match libtk.a version (8.6)") and the toolkit rightly refuses it.
+          - os: macos-15-intel
+            python: '3.10'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
