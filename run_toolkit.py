@@ -14,6 +14,10 @@ def _tk_problem():
         return "This Python has no Tk (tkinter) support, which the toolkit needs."
     if tkinter.TkVersion < 8.6:
         return f"This Python uses Tk {tkinter.TkVersion}; the toolkit needs Tk 8.6 or newer."
+    try:
+        tkinter.Tcl()  # loads the Tcl runtime without opening a window
+    except tkinter.TclError as e:
+        return f"This Python's Tcl/Tk installation is broken ({e})."
     return None
 
 _problem = _tk_problem()
@@ -48,11 +52,14 @@ else:
     ]
 
 
-def _app_dir():
-    # When frozen (PyInstaller), look next to the executable; otherwise next to this file.
+def _app_dirs():
+    """Folders that may hold a bundled adb/ folder."""
     if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
+        # PyInstaller: data bundled with --add-data unpacks to _MEIPASS; also
+        # allow an adb/ folder placed next to the executable.
+        return [d for d in (getattr(sys, "_MEIPASS", None),
+                            os.path.dirname(os.path.abspath(sys.executable))) if d]
+    return [os.path.dirname(os.path.abspath(__file__))]
 
 
 # Resolve the adb executable, in order: ADB_PATH env var, the bundled adb/
@@ -65,9 +72,10 @@ def _find_adb():
             override = os.path.join(override, ADB_NAME)
         # Use it even if it doesn't exist, so the error names the bad ADB_PATH.
         return override
-    local = os.path.join(_app_dir(), "adb", ADB_NAME)
-    if os.path.isfile(local):
-        return local
+    for app_dir in _app_dirs():
+        local = os.path.join(app_dir, "adb", ADB_NAME)
+        if os.path.isfile(local):
+            return local
     search_path = os.pathsep.join(p for p in [os.environ.get("PATH"), *EXTRA_ADB_DIRS] if p)
     return shutil.which("adb", path=search_path) or "adb"
 

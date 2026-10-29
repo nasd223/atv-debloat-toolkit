@@ -75,12 +75,7 @@ Click the green **Code** button on this page → **Download ZIP**, then unzip it
 pip install -r requirements.txt
 ```
 
-**macOS:** open Terminal in the project folder and create a virtual environment (Homebrew's Python refuses system-wide `pip install`, and this keeps the library tied to the right Python):
-
-```
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
+**macOS:** nothing to do here — the `run_toolkit.command` launcher in Step 5 sets everything up the first time you run it. (Prefer doing it by hand? See [Running from Terminal on macOS](#running-from-terminal-on-macos).)
 
 > **Why FreeSimpleGUI?** PySimpleGUI v5+ became closed-source and requires a licence key. [FreeSimpleGUI](https://github.com/spyoungtech/FreeSimpleGUI) is the free, open-source (LGPL) fork with the same API, so there is no licence prompt.
 
@@ -103,11 +98,17 @@ brew install --cask android-platform-tools
 python run_toolkit.py
 ```
 
-Or double-click `run_toolkit.py` if Python is associated with `.py` files on your system.
+Or double-click `run_toolkit.pyw` to start it without a console window.
 
-**macOS:** in Terminal in the project folder, run:
+**macOS:** double-click **`run_toolkit.command`** in Finder. The first launch takes a minute: it finds a suitable Python, creates a private environment in a `.venv` folder inside the project and installs the requirements. Later launches start straight away.
+
+> **"cannot be opened because it is from an unidentified developer"?** macOS blocks downloaded scripts the first time. Right-click (or Control-click) `run_toolkit.command` → **Open** → **Open**. You only need to do this once. If Finder says the file isn't executable, run `chmod +x run_toolkit.command` in Terminal, or start it with `bash run_toolkit.command`.
+
+#### Running from Terminal on macOS
 
 ```
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python run_toolkit.py
 ```
 
@@ -164,7 +165,7 @@ The toolkit looks for ADB in this order: the `ADB_PATH` environment variable, th
 - **macOS:** run `brew install --cask android-platform-tools`, or set `ADB_PATH` to the full path of your `adb`.
 
 **"This Python has no Tk" / "needs Tk 8.6" (macOS):**
-Install Python from [python.org](https://www.python.org/downloads/), or with Homebrew run `brew install python-tk`. Then delete the `.venv` folder and redo Step 3 so the virtual environment uses that Python.
+Install Python from [python.org](https://www.python.org/downloads/), or with Homebrew run `brew install python-tk`. Then double-click `run_toolkit.command` again — it notices the broken environment and rebuilds it. (If you set it up by hand, delete the `.venv` folder and redo [Running from Terminal on macOS](#running-from-terminal-on-macos).)
 
 **32-bit ADB / incompatible with 64-bit Windows:**
 The bundled `adb.exe` may be 32-bit. Replace the files in the `adb/` folder with the latest 64-bit version:
@@ -224,7 +225,7 @@ Some people prefer to use a `.exe` file rather than running a Python script — 
 
 ### What you need first
 
-Make sure you have already completed Steps 1 and 2 from the Setup section above (Python installed and FreeSimpleGUI installed).
+Make sure you have already completed Steps 1–3 from the Setup section above (Python installed, project downloaded, and FreeSimpleGUI installed).
 
 ### Step-by-step
 
@@ -247,12 +248,13 @@ Navigate to the folder where you unzipped this project. Click the address bar at
 Type the following and press Enter:
 
 ```
-pyinstaller --onefile --windowed run_toolkit.py
+pyinstaller --onefile --windowed --add-data "adb;adb" run_toolkit.py
 ```
 
 What this does:
 - `--onefile` packages everything into a single `.exe` file (easier to use)
 - `--windowed` prevents a black console window from appearing when you run the app
+- `--add-data "adb;adb"` puts the bundled `adb/` folder inside the exe, so it still finds ADB after you move it
 
 This will take 30–60 seconds. You will see a lot of text scroll by — that is normal.
 
@@ -261,6 +263,29 @@ This will take 30–60 seconds. You will see a lot of text scroll by — that is
 When it finishes, open the `dist` folder inside the project folder. Your `run_toolkit.exe` is in there. You can move it anywhere you like — your Desktop, for example.
 
 > **Note:** This exe will work on your machine but may still trigger antivirus warnings if you send it to someone else. That is expected behaviour — see the [Why Did Antivirus Flag This?](#️-why-did-antivirus-flag-this-as-a-trojan) section. If you want to share the toolkit with someone, send them the Python source and point them to the Setup instructions instead.
+
+---
+
+## 🍎 Building a macOS App (Optional)
+
+Double-clicking `run_toolkit.command` is the easiest way to run the toolkit on a Mac. If you'd rather have a normal app you can keep in Applications and the Dock, you can build one:
+
+1. Run `run_toolkit.command` once, so the Python environment is set up.
+2. In Terminal, in the project folder, run:
+
+   ```
+   ./build_macos_app.sh
+   ```
+
+3. Your app is at `dist/Android TV Toolkit.app`. Drag it to Applications.
+
+Notes:
+- The app is built for your Mac's chip (Apple Silicon or Intel).
+- It isn't notarised by Apple (that needs a paid developer account), so it runs on the Mac that built it. If you copy it to another Mac, Gatekeeper will block it until you run `xattr -cr "/Applications/Android TV Toolkit.app"` on that Mac.
+- ADB isn't included — install it with `brew install --cask android-platform-tools`. The app finds Homebrew's ADB even when started from Finder or the Dock.
+
+---
+
 ## Credits
 
 Inspired by the Reddit Android TV community.  

@@ -239,7 +239,7 @@ def test_find_adb_extra_dirs_fallback(monkeypatch, tmp_path):
     monkeypatch.delenv("ADB_PATH", raising=False)
     empty_app_dir = tmp_path / "app"
     empty_app_dir.mkdir()
-    monkeypatch.setattr(run_toolkit, "_app_dir", lambda: str(empty_app_dir))
+    monkeypatch.setattr(run_toolkit, "_app_dirs", lambda: [str(empty_app_dir)])
 
     empty_path_dir = tmp_path / "empty_path"
     empty_path_dir.mkdir()
