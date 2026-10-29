@@ -15,7 +15,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 # Reuse the environment run_toolkit.command sets up, and make sure its Python
 # has a working Tk 8.6+ — otherwise the app would silently quit on launch.
-if ! .venv/bin/python -c 'import tkinter, sys; sys.exit(float(tkinter.Tcl().eval("info tclversion")) < 8.6)' >/dev/null 2>&1; then
+if ! .venv/bin/python -c 'import tkinter, sys; tkinter.Tcl(); sys.exit(tkinter.TkVersion < 8.6)' >/dev/null 2>&1; then
     echo "No working .venv yet — run ./run_toolkit.command once first (it sets up Python with Tk)." >&2
     exit 1
 fi

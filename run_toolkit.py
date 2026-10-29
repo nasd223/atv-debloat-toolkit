@@ -12,15 +12,12 @@ def _tk_problem():
         import tkinter
     except ImportError:
         return "This Python has no Tk (tkinter) support, which the toolkit needs."
+    if tkinter.TkVersion < 8.6:
+        return f"This Python uses Tk {tkinter.TkVersion}; the toolkit needs Tk 8.6 or newer."
     try:
-        # Load the Tcl runtime without opening a window. Check the version that
-        # actually runs, not tkinter.TkVersion: some builds (e.g. GitHub's Intel
-        # macOS Python 3.10) were compiled against 8.5 headers but run 8.6.
-        version = tkinter.Tcl().eval("info tclversion")
+        tkinter.Tcl()  # loads the Tcl runtime without opening a window
     except tkinter.TclError as e:
         return f"This Python's Tcl/Tk installation is broken ({e})."
-    if float(version) < 8.6:
-        return f"This Python uses Tk {version}; the toolkit needs Tk 8.6 or newer."
     return None
 
 _problem = _tk_problem()
