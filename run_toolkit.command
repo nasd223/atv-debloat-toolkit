@@ -21,7 +21,7 @@ fail() {
 # (Apple's /usr/bin/python3 has Tk 8.5, which freezes; Homebrew's python needs
 # python-tk installed).
 tk_ok() {
-    "$1" -c 'import sys, tkinter; tkinter.Tcl(); sys.exit(not (sys.version_info >= (3, 8) and tkinter.TkVersion >= 8.6))' >/dev/null 2>&1
+    "$1" -c 'import sys, tkinter; v = float(tkinter.Tcl().eval("info tclversion")); sys.exit(not (sys.version_info >= (3, 8) and v >= 8.6))' >/dev/null 2>&1
 }
 
 find_python() {
