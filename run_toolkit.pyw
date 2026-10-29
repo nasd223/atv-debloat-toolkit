@@ -1,15 +1,83 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
-import PySimpleGUI as sg
 
-# Resolve the adb executable: prefer the bundled adb/ subfolder next to this
-# script so users don't need ADB on their system PATH.
+# The GUI needs Tk 8.6+. Some Python builds ship without Tk (Homebrew's on
+# macOS) or with the old Tk 8.5 that hangs on modern macOS (Apple's
+# /usr/bin/python3), so fail with a fix instead of a traceback or a freeze.
+def _tk_problem():
+    try:
+        import tkinter
+    except ImportError:
+        return "This Python has no Tk (tkinter) support, which the toolkit needs."
+    if tkinter.TkVersion < 8.6:
+        return f"This Python uses Tk {tkinter.TkVersion}; the toolkit needs Tk 8.6 or newer."
+    return None
+
+_problem = _tk_problem()
+if _problem:
+    if sys.platform == "darwin":
+        hint = ("Install Python from python.org (includes Tk), or with Homebrew run:\n"
+                "  brew install python-tk")
+    elif sys.platform.startswith("linux"):
+        hint = "Install your distro's Tk package, e.g.: sudo apt install python3-tk"
+    else:
+        hint = "Reinstall Python from python.org and tick 'tcl/tk and IDLE'."
+    sys.exit(f"{_problem}\n{hint}")
+
+import FreeSimpleGUI as sg
+
+IS_WINDOWS = sys.platform == "win32"
+ADB_NAME = "adb.exe" if IS_WINDOWS else "adb"
+
+# Common adb install locations that may be missing from PATH, e.g. when the
+# app is launched from Finder/Dock on macOS (which uses a minimal PATH).
+if IS_WINDOWS:
+    EXTRA_ADB_DIRS = [
+        os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~/AppData/Local")),
+                     "Android", "Sdk", "platform-tools"),        # Android Studio
+    ]
+else:
+    EXTRA_ADB_DIRS = [
+        "/opt/homebrew/bin",                                        # Homebrew, Apple Silicon
+        "/usr/local/bin",                                           # Homebrew, Intel Mac
+        os.path.expanduser("~/Library/Android/sdk/platform-tools"),  # Android Studio, macOS
+        os.path.expanduser("~/Android/Sdk/platform-tools"),          # Android Studio, Linux
+    ]
+
+
+def _app_dir():
+    # When frozen (PyInstaller), look next to the executable; otherwise next to this file.
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+# Resolve the adb executable, in order: ADB_PATH env var, the bundled adb/
+# subfolder next to this script, then PATH plus common install locations.
 def _find_adb():
-    script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    local = os.path.join(script_dir, "adb", "adb.exe")
-    return local if os.path.isfile(local) else "adb"
+    override = os.environ.get("ADB_PATH", "").strip()
+    if override:
+        override = os.path.expanduser(override)
+        if os.path.isdir(override):
+            override = os.path.join(override, ADB_NAME)
+        # Use it even if it doesn't exist, so the error names the bad ADB_PATH.
+        return override
+    local = os.path.join(_app_dir(), "adb", ADB_NAME)
+    if os.path.isfile(local):
+        return local
+    search_path = os.pathsep.join(p for p in [os.environ.get("PATH"), *EXTRA_ADB_DIRS] if p)
+    return shutil.which("adb", path=search_path) or "adb"
+
+
+def _adb_missing_hint():
+    if sys.platform == "darwin":
+        return "Install it with:  brew install --cask android-platform-tools"
+    if IS_WINDOWS:
+        return "Make sure the adb/ folder is present next to this script."
+    return "Install it with your package manager, e.g.: sudo apt install adb"
 
 ADB = _find_adb()
 
@@ -48,7 +116,10 @@ def run_adb(*args):
         )
         return result.stdout, result.stderr, result.returncode
     except FileNotFoundError:
-        return "", f"adb not found at '{ADB}'. Make sure the adb/ folder is present next to this script.", 1
+        return "", f"adb not found at '{ADB}'. {_adb_missing_hint()}", 1
+    except OSError as e:
+        # e.g. not executable, or wrong architecture
+        return "", f"Could not run adb at '{ADB}': {e}", 1
     except subprocess.TimeoutExpired:
         return "", "ADB command timed out.", 1
 
