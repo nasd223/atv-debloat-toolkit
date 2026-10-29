@@ -17,10 +17,11 @@ Built using Python and FreeSimpleGUI.
 ## Features
 - Connect to Android TV over Wi-Fi (ADB Wireless)
 - Pair & Connect for Android 11+ / Chromecast with Google TV (Wireless Debugging)
-- Debloat TCL and Google bloatware
-- Remove Google TV Recommendations
+- Debloat TCL and Google bloatware (apps are disabled, not uninstalled — fully reversible)
+- Disable Google TV Recommendations
+- Re-enable any disabled app (undo)
 - Install APKs remotely (FLauncher included)
-- Disable Google Launcher safely (after installing a custom launcher)
+- Disable the Google TV / Android TV launcher safely (refuses unless another launcher is installed)
 - Reboot TV remotely
 
 ---
@@ -113,17 +114,19 @@ Or double-click `run_toolkit.py` if Python is associated with `.py` files on you
 ### Step 6 — Connect and use
 
 **Standard Android TV (TCL, Onn, Nvidia Shield):**
-1. Click **Connect to TV** and enter your TV's IP address (find it under **Settings → Network → About**).
+1. Click **Connect to TV** and enter your TV's IP address (find it under **Settings → Network → About**). If your TV uses a port other than 5555, enter it as `IP:port`.
 
 **Android 11+ / Chromecast with Google TV:**
 1. Enable **Wireless Debugging** in Developer Options (separate from ADB Debugging).
-2. Click **Pair & Connect (Android 11+ / Chromecast)** and fill in the IP, Pairing Port, Pairing Code, and Debug Port shown on your TV's Wireless Debugging screen.
+2. Click **Pair & Connect (Android 11+ / Chromecast)** and fill in the IP, Pairing Port, Pairing Code, and Debug Port shown on your TV's Wireless Debugging screen. The pairing port and the debug port are different, and both change each time — a TV restart also turns Wireless Debugging off.
 
 Then choose a function:
-- **Safe Debloat** — recommended first run; removes common bloatware safely
-- **Advanced Debloat** — more options with risk ratings (✅ Safe / ⚠️ Caution / 🚫 Critical)
+- **Safe Debloat** — recommended first run; disables common bloatware. Apps that aren't on your TV are greyed out.
+- **Advanced Debloat** — more options with risk ratings (✅ Safe / ⚠️ Caution / 🚫 Critical). Critical apps ask for confirmation.
+- **Re-enable Apps** — lists every disabled app on the TV so you can turn any of them back on
 - **Install APK** — install apps directly to your TV
-- **Disable Google TV Launcher** — only do this after installing a backup launcher like FLauncher
+- **Disable Google TV Launcher** — disables the Google TV (Chromecast) or Android TV home screen. It refuses unless another launcher such as FLauncher is installed, and asks before doing anything.
+- **Reboot TV** — restarts the TV (asks first)
 
 ---
 
@@ -137,6 +140,19 @@ If you plan to disable the Google TV Launcher, install a backup launcher first s
 4. Then use **Disable Google TV Launcher** in the Toolkit.
 
 ✅ FLauncher is open-source, ad-free, and maintained by the community.
+
+---
+
+## 🧪 Running the Tests (for contributors)
+
+The unit tests fake all adb calls, so no TV is needed:
+
+```
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+On macOS, run these with your virtual environment's Python (`.venv/bin/python -m pip ...` and `.venv/bin/python -m pytest`).
 
 ---
 
