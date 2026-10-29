@@ -155,6 +155,8 @@ python -m pytest
 
 On macOS, run these with your virtual environment's Python (`.venv/bin/python -m pip ...` and `.venv/bin/python -m pytest`).
 
+GitHub Actions runs the same tests on Windows, macOS (Apple Silicon and Intel) and Linux for every pull request, opens every window for real (`ATV_GUI_TESTS=1`), and checks that the Windows `.exe` and macOS `.app` build and start.
+
 ---
 
 ## 🛠️ Troubleshooting: ADB Connection Issues
