@@ -861,7 +861,7 @@ NEEDS_TV = {"Safe Debloat", "Advanced Debloat", "Re-enable Apps", "Install APK",
 
 def _status_text():
     if state.connected:
-        return f"🟢 Connected: {state.target}"
+        return f"✅ Connected: {state.target}"
     return "⚪ Not connected — connect to a TV first"
 
 

@@ -66,21 +66,28 @@ def test_window_opens(rendered, dialog):
     assert len(rendered) == 1
 
 
-@pytest.mark.parametrize("connected", [False, True])
-def test_main_menu_greys_out_tv_actions_until_connected(rendered, monkeypatch, connected):
-    run_toolkit.state.connected = connected
-    seen = {}
+def test_main_menu_greys_out_tv_actions_until_connected(rendered, monkeypatch):
+    """TV-only buttons start disabled and are enabled once an action connects."""
+    run_toolkit.state.connected = False
+    snapshots = []
+    events = iter(["Connect to TV", sg.WINDOW_CLOSED])
     real_read = sg.Window.read
 
-    def read_once(self, timeout=None, **kwargs):
+    def read(self, timeout=None, **kwargs):
         real_read(self, timeout=100)
-        seen.update({name: self[name].Disabled for group, names in run_toolkit.MENU for name in names})
-        return sg.WINDOW_CLOSED, {}
+        snapshots.append(({name for _, names in run_toolkit.MENU for name in names
+                           if self[name].Widget.instate(["disabled"])}, self["-CONN-"].get()))
+        return next(events), {}
 
-    monkeypatch.setattr(sg.Window, "read", read_once)
+    def fake_connect():
+        run_toolkit.state.connected = True
+
+    monkeypatch.setattr(sg.Window, "read", read)
+    monkeypatch.setitem(run_toolkit.main_menu.__globals__, "connect_to_tv", fake_connect)
     run_toolkit.main_menu()
-    assert {name for name, disabled in seen.items() if disabled} == (
-        set() if connected else run_toolkit.NEEDS_TV)
+    (disabled_before, status_before), (disabled_after, status_after) = snapshots
+    assert disabled_before == run_toolkit.NEEDS_TV and status_before.startswith("⚪")
+    assert disabled_after == set() and status_after.startswith("✅ Connected")
 
 
 def test_debloat_checkbox_shows_package_and_tooltip(rendered, monkeypatch):
