@@ -9,7 +9,7 @@ import run_toolkit
 def _make_adb(folder):
     adb = folder / "adb" / run_toolkit.ADB_NAME
     adb.parent.mkdir(parents=True)
-    adb.write_text("", encoding="utf-8")
+    adb.write_bytes(b"MZ")  # Windows only accepts files that look like programs
     return str(adb)
 
 
