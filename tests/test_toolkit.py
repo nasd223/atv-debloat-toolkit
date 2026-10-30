@@ -1,7 +1,9 @@
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -153,7 +155,7 @@ def test_first_error_line(text, expected):
     [
         (
             "error: protocol fault (couldn't read status message): Undefined error: 0",
-            "Nothing on that port answered as a pairing service.",
+            "The pairing service didn't complete the handshake.",
         ),
         (
             "failed to connect to '127.0.0.1:5599': Connection refused",
@@ -253,6 +255,105 @@ def test_find_adb_extra_dirs_fallback(monkeypatch, tmp_path):
     monkeypatch.setattr(run_toolkit, "EXTRA_ADB_DIRS", [str(extra_dir)])
 
     assert run_toolkit._find_adb() == str(fake_adb)
+
+
+def test_find_adb_skips_windows_placeholder(monkeypatch, tmp_path):
+    # Old copies of the repo shipped a 2-byte adb/adb.exe that isn't a program.
+    monkeypatch.delenv("ADB_PATH", raising=False)
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", True)
+    monkeypatch.setattr(run_toolkit, "ADB_NAME", "adb.exe")
+    monkeypatch.setattr(run_toolkit, "_app_dirs", lambda: [str(tmp_path)])
+    monkeypatch.setattr(run_toolkit, "EXTRA_ADB_DIRS", [])
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    (tmp_path / "adb").mkdir()
+    local = tmp_path / "adb" / "adb.exe"
+    local.write_bytes(b"\r\n")
+    assert run_toolkit._find_adb() == "adb"
+    local.write_bytes(b"MZ" + b"\0" * 64)
+    assert run_toolkit._find_adb() == str(local)
+
+
+@pytest.fixture
+def no_adb(monkeypatch):
+    """adb can't be found; records popups and download attempts."""
+    calls = []
+    monkeypatch.delenv("ADB_PATH", raising=False)
+    monkeypatch.setattr(run_toolkit, "ADB", run_toolkit.ADB)  # ensure_adb reassigns it
+    monkeypatch.setattr(run_toolkit, "_find_adb", lambda: "adb")
+    monkeypatch.setattr(run_toolkit.shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(run_toolkit.sg, "popup", lambda *a, **k: calls.append(("popup", k.get("title"))))
+    monkeypatch.setattr(run_toolkit, "download_adb", lambda: calls.append(("download", None)) or True)
+    return calls
+
+
+def test_ensure_adb_windows_offers_download(monkeypatch, no_adb):
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", True)
+    monkeypatch.setattr(run_toolkit.sg, "popup_yes_no", lambda *a, **k: "No")
+    run_toolkit.ensure_adb()
+    assert no_adb == []
+
+    monkeypatch.setattr(run_toolkit.sg, "popup_yes_no", lambda *a, **k: "Yes")
+    run_toolkit.ensure_adb()
+    assert no_adb == [("download", None), ("popup", "ADB Installed")]
+
+
+def test_ensure_adb_elsewhere_shows_install_hint(monkeypatch, no_adb):
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", False)
+    run_toolkit.ensure_adb()
+    assert no_adb == [("popup", "ADB Missing")]
+
+
+def test_ensure_adb_quiet_when_adb_path_set(monkeypatch, no_adb):
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", True)
+    monkeypatch.setenv("ADB_PATH", "C:/missing/adb.exe")
+    run_toolkit.ensure_adb()
+    assert no_adb == []
+
+
+def test_ensure_adb_quiet_when_local_adb_not_executable(monkeypatch, no_adb, tmp_path):
+    # run_adb reports "can't run" for this; it isn't "missing".
+    local = tmp_path / "adb"
+    local.write_text("", encoding="utf-8")
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", False)
+    monkeypatch.setattr(run_toolkit, "_find_adb", lambda: str(local))
+    run_toolkit.ensure_adb()
+    assert no_adb == []
+
+
+class _FakeResponse(io.BytesIO):
+    headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _platform_tools_zip(names):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name in names:
+            z.writestr(f"platform-tools/{name}", b"MZ" + name.encode())
+    return buf.getvalue()
+
+
+def test_download_adb_extracts_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_toolkit, "ADB_DIR", str(tmp_path / "adb"))
+    data = _platform_tools_zip(run_toolkit.ADB_FILES)
+    monkeypatch.setattr(run_toolkit.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(data))
+    assert run_toolkit.download_adb() is True
+    assert sorted(p.name for p in (tmp_path / "adb").iterdir()) == sorted(run_toolkit.ADB_FILES)
+    assert (tmp_path / "adb" / "adb.exe").read_bytes() == b"MZadb.exe"
+
+
+def test_download_adb_failure_leaves_no_adb_exe(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_toolkit, "ADB_DIR", str(tmp_path / "adb"))
+    data = _platform_tools_zip(["adb.exe", "AdbWinApi.dll"])  # AdbWinUsbApi.dll missing
+    monkeypatch.setattr(run_toolkit.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(data))
+    with pytest.raises(KeyError):
+        run_toolkit.download_adb()
+    assert not (tmp_path / "adb" / "adb.exe").exists()
 
 
 def test_reconnect_check_not_connected_initially(monkeypatch):
@@ -539,3 +640,32 @@ class _FakeWindow:
 )
 def test_should_close(event, busy, expected):
     assert run_toolkit.should_close(event, _FakeWindow(busy)) is expected
+
+
+FAULT = "error: protocol fault (couldn't read status message): Undefined error: 0"
+PAIRED = "Successfully paired to 1.2.3.4:37000 [guid=adb-x]"
+
+
+@pytest.mark.parametrize(
+    ("replies", "expected_calls", "paired"),
+    [
+        ([("", FAULT), (PAIRED, "")], ["pair", "kill-server", "start-server", "pair"], True),
+        ([("", FAULT), ("", FAULT)], ["pair", "kill-server", "start-server", "pair"], False),
+        ([("Failed: Wrong password or connection was dropped.", "")], ["pair"], False),
+        ([(PAIRED, "")], ["pair"], True),
+    ],
+)
+def test_adb_pair_restarts_server_once_on_protocol_fault(monkeypatch, replies, expected_calls, paired):
+    calls, replies = [], list(replies)
+
+    def fake_run_adb(*args, **kwargs):
+        calls.append(args[0])
+        if args[0] == "pair":
+            out, err = replies.pop(0)
+            return out, err, 0 if out.startswith("Success") else 1
+        return "", "", 0
+
+    monkeypatch.setattr(run_toolkit, "run_adb", fake_run_adb)
+    stdout, _ = run_toolkit.adb_pair("1.2.3.4:37000", "123456")
+    assert calls == expected_calls
+    assert run_toolkit.pair_succeeded(stdout) is paired

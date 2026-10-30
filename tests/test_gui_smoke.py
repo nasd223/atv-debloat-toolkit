@@ -50,6 +50,7 @@ def rendered(monkeypatch):
     enabled, disabled = set(pkgs[::2]), set(pkgs[1::2])
     run_toolkit.state.ip, run_toolkit.state.port, run_toolkit.state.connected = "192.0.2.1", "5555", True
     monkeypatch.setattr(run_toolkit, "reconnect_check", lambda: True)
+    monkeypatch.setattr(run_toolkit, "ADB", run_toolkit.ADB)  # main_menu runs ensure_adb
     monkeypatch.setattr(run_toolkit, "package_state", lambda: (enabled, disabled))
     monkeypatch.setattr(run_toolkit, "run_adb", lambda *a, **k: ("", "", 0))
     yield titles
