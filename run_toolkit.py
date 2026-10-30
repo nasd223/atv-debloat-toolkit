@@ -41,7 +41,8 @@ import FreeSimpleGUI as sg
 # Follow the OS look (incl. macOS dark mode) instead of FreeSimpleGUI's blue
 # theme, and use the system UI font rather than its fixed Helvetica 10.
 sg.theme("SystemDefaultForReal")
-sg.set_options(font="TkDefaultFont", use_ttk_buttons=True)
+sg.set_options(font="TkDefaultFont", use_ttk_buttons=True,
+               ttk_theme="aqua" if sys.platform == "darwin" else None)
 
 IS_WINDOWS = sys.platform == "win32"
 ADB_NAME = "adb.exe" if IS_WINDOWS else "adb"
