@@ -3,8 +3,10 @@
 Needs a display, so it only runs when ATV_GUI_TESTS=1 (CI sets it; Linux CI
 runs under xvfb).
 """
+import functools
 import os
 import sys
+import tkinter
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ sg = run_toolkit.sg
 ALL_PACKAGES = ({pkg for _, pkg in run_toolkit.safe_apps}
                 | {pkg for _, pkg, _ in run_toolkit.apps}
                 | {pkg for _, pkg in run_toolkit.GOOGLE_LAUNCHERS})
+_shared_tcl = functools.lru_cache(maxsize=None)(tkinter.Tcl)
 
 
 @pytest.fixture
@@ -33,6 +36,11 @@ def rendered(monkeypatch):
         return sg.WINDOW_CLOSED, {}
 
     monkeypatch.setattr(sg.Window, "read", read_once)
+    # FreeSimpleGUI creates a throwaway Tcl interpreter for every window just to
+    # read the version. Creating dozens in one process intermittently fails on
+    # Windows CI ("Can't find a usable init.tcl ... No error"; see
+    # actions/setup-python#1102, python/cpython#126549), so reuse one.
+    monkeypatch.setattr(tkinter, "Tcl", _shared_tcl)
     for name in ("popup", "popup_scrolled"):
         monkeypatch.setattr(sg, name, lambda *a, **k: None)
     monkeypatch.setattr(sg, "popup_yes_no", lambda *a, **k: "No")
