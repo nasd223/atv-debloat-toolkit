@@ -669,3 +669,22 @@ def test_adb_pair_restarts_server_once_on_protocol_fault(monkeypatch, replies, e
     stdout, _ = run_toolkit.adb_pair("1.2.3.4:37000", "123456")
     assert calls == expected_calls
     assert run_toolkit.pair_succeeded(stdout) is paired
+
+
+@pytest.mark.parametrize(
+    ("pair_out", "connect_ok", "expected"),
+    [
+        (PAIRED, True, (True, True, "")),
+        (PAIRED, False, (True, False, "⚠️ Paired OK but connection failed.")),
+        ("Failed: Wrong password or connection was dropped.", True, (False, False, "❌ Pairing failed.")),
+    ],
+)
+def test_pair_then_connect(monkeypatch, pair_out, connect_ok, expected):
+    connects = []
+    monkeypatch.setattr(run_toolkit, "adb_pair", lambda target, code: (pair_out, ""))
+    monkeypatch.setattr(run_toolkit, "adb_connect",
+                        lambda target: connects.append(target) or (connect_ok, "refused"))
+    paired, ok, message = run_toolkit._pair_then_connect("1.2.3.4", "37000", "123456", "40000")
+    assert (paired, ok) == expected[:2]
+    assert message.startswith(expected[2])
+    assert connects == (["1.2.3.4:40000"] if paired else [])
