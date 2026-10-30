@@ -255,6 +255,59 @@ def test_find_adb_extra_dirs_fallback(monkeypatch, tmp_path):
     assert run_toolkit._find_adb() == str(fake_adb)
 
 
+def test_find_adb_skips_windows_placeholder(monkeypatch, tmp_path):
+    # Old copies of the repo shipped a 2-byte adb/adb.exe that isn't a program.
+    monkeypatch.delenv("ADB_PATH", raising=False)
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", True)
+    monkeypatch.setattr(run_toolkit, "ADB_NAME", "adb.exe")
+    monkeypatch.setattr(run_toolkit, "_app_dirs", lambda: [str(tmp_path)])
+    monkeypatch.setattr(run_toolkit, "EXTRA_ADB_DIRS", [])
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    (tmp_path / "adb").mkdir()
+    local = tmp_path / "adb" / "adb.exe"
+    local.write_bytes(b"\r\n")
+    assert run_toolkit._find_adb() == "adb"
+    local.write_bytes(b"MZ" + b"\0" * 64)
+    assert run_toolkit._find_adb() == str(local)
+
+
+@pytest.fixture
+def no_adb(monkeypatch):
+    """adb can't be found; records popups and download attempts."""
+    calls = []
+    monkeypatch.delenv("ADB_PATH", raising=False)
+    monkeypatch.setattr(run_toolkit, "ADB", run_toolkit.ADB)  # ensure_adb reassigns it
+    monkeypatch.setattr(run_toolkit, "_find_adb", lambda: "adb")
+    monkeypatch.setattr(run_toolkit.shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(run_toolkit.sg, "popup", lambda *a, **k: calls.append(("popup", k.get("title"))))
+    monkeypatch.setattr(run_toolkit, "download_adb", lambda: calls.append(("download", None)) or True)
+    return calls
+
+
+def test_ensure_adb_windows_offers_download(monkeypatch, no_adb):
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", True)
+    monkeypatch.setattr(run_toolkit.sg, "popup_yes_no", lambda *a, **k: "No")
+    run_toolkit.ensure_adb()
+    assert no_adb == []
+
+    monkeypatch.setattr(run_toolkit.sg, "popup_yes_no", lambda *a, **k: "Yes")
+    run_toolkit.ensure_adb()
+    assert no_adb == [("download", None), ("popup", "ADB Installed")]
+
+
+def test_ensure_adb_elsewhere_shows_install_hint(monkeypatch, no_adb):
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", False)
+    run_toolkit.ensure_adb()
+    assert no_adb == [("popup", "ADB Missing")]
+
+
+def test_ensure_adb_quiet_when_adb_path_set(monkeypatch, no_adb):
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", True)
+    monkeypatch.setenv("ADB_PATH", "C:/missing/adb.exe")
+    run_toolkit.ensure_adb()
+    assert no_adb == []
+
+
 def test_reconnect_check_not_connected_initially(monkeypatch):
     calls = []
     monkeypatch.setattr(run_toolkit, "run_adb", lambda *a, **kw: calls.append(a))

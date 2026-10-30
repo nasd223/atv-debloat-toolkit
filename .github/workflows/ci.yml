@@ -142,7 +142,7 @@ jobs:
       - name: Build Windows executable with PyInstaller
         shell: bash
         run: |
-          pyinstaller --onefile --windowed --add-data "adb;adb" run_toolkit.py
+          pyinstaller --onefile --windowed run_toolkit.py
           test -f dist/run_toolkit.exe
 
       - name: Smoke test Windows executable

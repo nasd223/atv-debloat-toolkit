@@ -1,3 +1,5 @@
+# ADB is downloaded from Google on first launch (Windows) or found on PATH
+adb/
 __pycache__/
 *.pyc
 .venv/
