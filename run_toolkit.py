@@ -1,3 +1,4 @@
+import http.client
 import io
 import os
 import re
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import urllib.request
 import zipfile
+import zlib
 
 # The GUI needs Tk 8.6+. Some Python builds ship without Tk (Homebrew's on
 # macOS) or with the old Tk 8.5 that hangs on modern macOS (Apple's
@@ -131,10 +133,14 @@ def download_adb():
                 return False
 
     os.makedirs(ADB_DIR, exist_ok=True)
+    # Extract to temporary names and only then move into place, so a failed
+    # download never leaves a half-written adb.exe that looks installed.
     with zipfile.ZipFile(buffer) as archive:
         for name in ADB_FILES:
-            with archive.open(f"platform-tools/{name}") as src, open(os.path.join(ADB_DIR, name), "wb") as dst:
+            with archive.open(f"platform-tools/{name}") as src, open(os.path.join(ADB_DIR, name + ".part"), "wb") as dst:
                 shutil.copyfileobj(src, dst)
+    for name in ADB_FILES[::-1]:  # adb.exe last
+        os.replace(os.path.join(ADB_DIR, name + ".part"), os.path.join(ADB_DIR, name))
     return True
 
 
@@ -143,7 +149,8 @@ def ensure_adb():
     global ADB
     ADB = _find_adb()
     # A bad ADB_PATH is reported when adb is first used, naming the path.
-    if shutil.which(ADB) or os.environ.get("ADB_PATH", "").strip():
+    # (A file that exists but can't run is reported by run_adb, not as missing.)
+    if os.path.isfile(ADB) or shutil.which(ADB) or os.environ.get("ADB_PATH", "").strip():
         return
     if not IS_WINDOWS:
         sg.popup(f"ADB was not found.\n\n{_adb_missing_hint()}", title="ADB Missing")
@@ -158,7 +165,7 @@ def ensure_adb():
     try:
         if not download_adb():
             return
-    except (OSError, zipfile.BadZipFile, KeyError) as e:
+    except (OSError, zipfile.BadZipFile, zlib.error, http.client.HTTPException, KeyError) as e:
         sg.one_line_progress_meter_cancel(key="adb_download")
         sg.popup(
             f"❌ ADB download failed: {e}\n\n"

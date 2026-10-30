@@ -1,7 +1,9 @@
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -306,6 +308,52 @@ def test_ensure_adb_quiet_when_adb_path_set(monkeypatch, no_adb):
     monkeypatch.setenv("ADB_PATH", "C:/missing/adb.exe")
     run_toolkit.ensure_adb()
     assert no_adb == []
+
+
+def test_ensure_adb_quiet_when_local_adb_not_executable(monkeypatch, no_adb, tmp_path):
+    # run_adb reports "can't run" for this; it isn't "missing".
+    local = tmp_path / "adb"
+    local.write_text("", encoding="utf-8")
+    monkeypatch.setattr(run_toolkit, "IS_WINDOWS", False)
+    monkeypatch.setattr(run_toolkit, "_find_adb", lambda: str(local))
+    run_toolkit.ensure_adb()
+    assert no_adb == []
+
+
+class _FakeResponse(io.BytesIO):
+    headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _platform_tools_zip(names):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name in names:
+            z.writestr(f"platform-tools/{name}", b"MZ" + name.encode())
+    return buf.getvalue()
+
+
+def test_download_adb_extracts_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_toolkit, "ADB_DIR", str(tmp_path / "adb"))
+    data = _platform_tools_zip(run_toolkit.ADB_FILES)
+    monkeypatch.setattr(run_toolkit.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(data))
+    assert run_toolkit.download_adb() is True
+    assert sorted(p.name for p in (tmp_path / "adb").iterdir()) == sorted(run_toolkit.ADB_FILES)
+    assert (tmp_path / "adb" / "adb.exe").read_bytes() == b"MZadb.exe"
+
+
+def test_download_adb_failure_leaves_no_adb_exe(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_toolkit, "ADB_DIR", str(tmp_path / "adb"))
+    data = _platform_tools_zip(["adb.exe", "AdbWinApi.dll"])  # AdbWinUsbApi.dll missing
+    monkeypatch.setattr(run_toolkit.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(data))
+    with pytest.raises(KeyError):
+        run_toolkit.download_adb()
+    assert not (tmp_path / "adb" / "adb.exe").exists()
 
 
 def test_reconnect_check_not_connected_initially(monkeypatch):
