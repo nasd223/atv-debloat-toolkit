@@ -263,13 +263,28 @@ def first_error_line(text):
     return "Unknown error"
 
 
+def adb_pair(target, code):
+    """Pair with a Wireless debugging pairing port; returns (stdout, stderr).
+
+    A long-running adb server sometimes fails every pairing attempt with
+    "protocol fault (couldn't read status message)" until it is restarted, so
+    restart it and try once more. The pairing code stays valid after a failure.
+    """
+    stdout, stderr, _ = run_adb("pair", target, code, timeout=30)
+    if not pair_succeeded(stdout) and "protocol fault" in (stderr + stdout).lower():
+        run_adb("kill-server")
+        run_adb("start-server", timeout=30)
+        stdout, stderr, _ = run_adb("pair", target, code, timeout=30)
+    return stdout, stderr
+
+
 def friendly_adb_error(text):
     """Explain common adb connection/pairing errors in plain words."""
     detail = first_error_line(text)
     low = text.lower()
     if "protocol fault" in low:
-        return (f"{detail}\n\nNothing on that port answered as a pairing service. The pairing "
-                "port and code change every time you open the pairing screen on the TV.")
+        return (f"{detail}\n\nThe pairing service didn't complete the handshake. Check the pairing "
+                "port: it and the code change every time you open the pairing screen on the TV.")
     if "connection refused" in low:
         return f"{detail}\n\nThe TV refused the connection. Check that debugging is on and the port is right."
     if "timed out" in low or "no route to host" in low:
@@ -495,7 +510,7 @@ def pair_and_connect():
                 continue
 
             # Step 1: pair
-            stdout, stderr, _ = run_adb("pair", f"{ip}:{pair_port}", pair_code, timeout=30)
+            stdout, stderr = adb_pair(f"{ip}:{pair_port}", pair_code)
             if not pair_succeeded(stdout):
                 sg.popup(f"❌ Pairing failed.\n\n{friendly_adb_error(stderr or stdout)}\n\n"
                          "Check the IP, port, and code shown on your TV.")

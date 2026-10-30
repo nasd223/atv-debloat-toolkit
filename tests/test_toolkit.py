@@ -155,7 +155,7 @@ def test_first_error_line(text, expected):
     [
         (
             "error: protocol fault (couldn't read status message): Undefined error: 0",
-            "Nothing on that port answered as a pairing service.",
+            "The pairing service didn't complete the handshake.",
         ),
         (
             "failed to connect to '127.0.0.1:5599': Connection refused",
@@ -640,3 +640,32 @@ class _FakeWindow:
 )
 def test_should_close(event, busy, expected):
     assert run_toolkit.should_close(event, _FakeWindow(busy)) is expected
+
+
+FAULT = "error: protocol fault (couldn't read status message): Undefined error: 0"
+PAIRED = "Successfully paired to 1.2.3.4:37000 [guid=adb-x]"
+
+
+@pytest.mark.parametrize(
+    ("replies", "expected_calls", "paired"),
+    [
+        ([("", FAULT), (PAIRED, "")], ["pair", "kill-server", "start-server", "pair"], True),
+        ([("", FAULT), ("", FAULT)], ["pair", "kill-server", "start-server", "pair"], False),
+        ([("Failed: Wrong password or connection was dropped.", "")], ["pair"], False),
+        ([(PAIRED, "")], ["pair"], True),
+    ],
+)
+def test_adb_pair_restarts_server_once_on_protocol_fault(monkeypatch, replies, expected_calls, paired):
+    calls, replies = [], list(replies)
+
+    def fake_run_adb(*args, **kwargs):
+        calls.append(args[0])
+        if args[0] == "pair":
+            out, err = replies.pop(0)
+            return out, err, 0 if out.startswith("Success") else 1
+        return "", "", 0
+
+    monkeypatch.setattr(run_toolkit, "run_adb", fake_run_adb)
+    stdout, _ = run_toolkit.adb_pair("1.2.3.4:37000", "123456")
+    assert calls == expected_calls
+    assert run_toolkit.pair_succeeded(stdout) is paired
