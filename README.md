@@ -6,9 +6,9 @@
 
 # Android TV Toolkit
 
-Lightweight Windows application to debloat TCL/Google Android TV devices, install APKs, and customize the TV experience.
+Lightweight desktop application (Windows and macOS) to debloat TCL/Google Android TV devices, install APKs, and customize the TV experience.
 
-Built using Python and PySimpleGUI.
+Built using Python and FreeSimpleGUI.
 
 > **Maintenance status:** This project is not actively maintained. It works as described and issues are read, but updates and responses may be slow. Pull requests are welcome — see the source code, it's short and straightforward.
 
@@ -45,8 +45,9 @@ You are encouraged to read the source code (`run_toolkit.py`) yourself — it is
 ---
 
 ## Requirements
-- Windows 10 or 11
-- **Python 3.8 or later** — [Download from python.org](https://www.python.org/downloads/)
+- Windows 10 or 11, or macOS (Apple Silicon or Intel)
+- **Python 3.8 or later** with Tk 8.6+ — [Download from python.org](https://www.python.org/downloads/)
+- macOS only: ADB from Homebrew (`brew install --cask android-platform-tools`)
 - TV must have Developer Options enabled
 - ADB Debugging turned ON
 - TV and PC must be on the same Wi-Fi network
@@ -58,21 +59,35 @@ You are encouraged to read the source code (`run_toolkit.py`) yourself — it is
 ### Step 1 — Install Python
 
 Download and install Python 3.8+ from [python.org](https://www.python.org/downloads/).  
-During installation, check **"Add Python to PATH"**.
+- **Windows:** during installation, check **"Add Python to PATH"**.
+- **macOS:** the python.org installer is recommended because it includes Tk, which the GUI needs. If you use Homebrew's Python instead, also run `brew install python-tk`. Don't use Apple's built-in `/usr/bin/python3` — its Tk 8.5 freezes on modern macOS.
 
-### Step 2 — Install the required library
-
-Open a Command Prompt and run:
-
-```
-pip install PySimpleGUI
-```
-
-> **PySimpleGUI licence note:** PySimpleGUI v5+ requires a free account at [PySimpleGUI.com](https://www.pysimplegui.com) to suppress the licence prompt. No payment is needed for personal use — just sign up and the prompt goes away.
-
-### Step 3 — Download this project
+### Step 2 — Download this project
 
 Click the green **Code** button on this page → **Download ZIP**, then unzip it anywhere.
+
+### Step 3 — Install the required library
+
+**Windows:** open a Command Prompt in the project folder and run:
+
+```
+pip install -r requirements.txt
+```
+
+**macOS:** open Terminal in the project folder and create a virtual environment (Homebrew's Python refuses system-wide `pip install`, and this keeps the library tied to the right Python):
+
+```
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+> **Why FreeSimpleGUI?** PySimpleGUI v5+ became closed-source and requires a licence key. [FreeSimpleGUI](https://github.com/spyoungtech/FreeSimpleGUI) is the free, open-source (LGPL) fork with the same API, so there is no licence prompt.
+
+**macOS only — install ADB:** the bundled `adb/` folder contains Windows binaries only. Install ADB with [Homebrew](https://brew.sh):
+
+```
+brew install --cask android-platform-tools
+```
 
 ### Step 4 — Enable ADB on your TV
 
@@ -81,13 +96,19 @@ Click the green **Code** button on this page → **Download ZIP**, then unzip it
 
 ### Step 5 — Run the Toolkit
 
-Open a Command Prompt in the project folder and run:
+**Windows:** in a Command Prompt in the project folder, run:
 
 ```
 python run_toolkit.py
 ```
 
 Or double-click `run_toolkit.py` if Python is associated with `.py` files on your system.
+
+**macOS:** in Terminal in the project folder, run:
+
+```
+.venv/bin/python run_toolkit.py
+```
 
 ### Step 6 — Connect and use
 
@@ -122,7 +143,12 @@ If you plan to disable the Google TV Launcher, install a backup launcher first s
 ## 🛠️ Troubleshooting: ADB Connection Issues
 
 **"adb not found" error:**
-The toolkit looks for ADB in the `adb/` folder next to the script. Make sure you unzipped the full project (not just the `.py` file).
+The toolkit looks for ADB in this order: the `ADB_PATH` environment variable, the `adb/` folder next to the script, then your `PATH` plus the usual install locations (Homebrew's `/opt/homebrew/bin` and `/usr/local/bin`, and Android Studio's `platform-tools`).
+- **Windows:** make sure you unzipped the full project (not just the `.py` file).
+- **macOS:** run `brew install --cask android-platform-tools`, or set `ADB_PATH` to the full path of your `adb`.
+
+**"This Python has no Tk" / "needs Tk 8.6" (macOS):**
+Install Python from [python.org](https://www.python.org/downloads/), or with Homebrew run `brew install python-tk`. Then delete the `.venv` folder and redo Step 3 so the virtual environment uses that Python.
 
 **32-bit ADB / incompatible with 64-bit Windows:**
 The bundled `adb.exe` may be 32-bit. Replace the files in the `adb/` folder with the latest 64-bit version:
@@ -139,7 +165,7 @@ The bundled `adb.exe` may be 32-bit. Replace the files in the `adb/` folder with
 ## 📖 FAQ
 
 **Q: Do I need to install anything to run the Toolkit?**  
-**A:** Yes — Python 3.8+ and the `PySimpleGUI` library (`pip install PySimpleGUI`). This replaced the old `.exe` approach to eliminate antivirus false positives.
+**A:** Yes — Python 3.8+ and the `FreeSimpleGUI` library (`pip install -r requirements.txt`); on macOS, also ADB via Homebrew. This replaced the old `.exe` approach to eliminate antivirus false positives.
 
 **Q: Will this work on all Android TV devices?**  
 **A:** The Toolkit is designed for devices that support ADB Debugging — TCL TVs, Onn 4K boxes, and Nvidia Shield TV. Chromecast with Google TV is supported via the Pair & Connect option. Start with Safe Debloat mode if you are unsure.
@@ -182,7 +208,7 @@ Some people prefer to use a `.exe` file rather than running a Python script — 
 
 ### What you need first
 
-Make sure you have already completed Steps 1 and 2 from the Setup section above (Python installed and PySimpleGUI installed).
+Make sure you have already completed Steps 1 and 2 from the Setup section above (Python installed and FreeSimpleGUI installed).
 
 ### Step-by-step
 
