@@ -3,11 +3,14 @@ import io
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import urllib.request
 import zipfile
 import zlib
+from dataclasses import dataclass
 
 # The GUI needs Tk 8.6+. Some Python builds ship without Tk (Homebrew's on
 # macOS) or with the old Tk 8.5 that hangs on modern macOS (Apple's
@@ -461,6 +464,196 @@ NON_LAUNCHER_HOMES = {
     "com.google.android.tvlauncher",
 }
 
+# --- Finding TVs on the network -------------------------------------------------
+# Google TVs announce themselves over mDNS (Bonjour): a friendly name at all
+# times, the Wireless debugging connect port while it's on, and a pairing port
+# while "Pair device with pairing code" is open. adb's own discovery only sees
+# the adb services and sometimes misses a TV, so zeroconf is used as well.
+
+NAME_SERVICE = "_androidtvremote2._tcp"     # Google TV remote: friendly name
+CONNECT_SERVICE = "_adb-tls-connect._tcp"   # Wireless debugging is on
+PAIRING_SERVICE = "_adb-tls-pairing._tcp"   # pairing screen is open
+LEGACY_PORT = "5555"                        # `adb tcpip` TVs; not announced
+
+
+@dataclass
+class FoundTV:
+    ip: str
+    name: str = ""
+    connect_port: str = ""
+    pair_port: str = ""
+
+    def __str__(self):  # how the TV is listed in the Connect / Pair windows
+        if self.pair_port:
+            status = "ready to pair"
+        elif self.connect_port:
+            status = "ready to connect"
+        else:
+            status = "debugging is off"
+        return f"{self.name or 'Android TV'}  ({self.ip})  —  {status}"
+
+
+def parse_mdns_services(stdout):
+    """(service, ip, port, instance) for each IPv4 line of `adb mdns services`."""
+    records = []
+    for line in stdout.splitlines():
+        parts = line.split()
+        types = [i for i, part in enumerate(parts) if part.startswith("_")]
+        if not types or len(parts) < 3:
+            continue
+        ip, _, port = parts[-1].rpartition(":")
+        service = re.sub(r"\.local$", "", parts[types[0]].rstrip("."))
+        if is_valid_ip(ip) and is_valid_port(port):
+            records.append((service, ip, port, " ".join(parts[:types[0]])))
+    return records
+
+
+def _port_open(ip, port, timeout=0.3):
+    try:
+        with socket.create_connection((ip, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def merge_found_tvs(records, port_open=None):
+    """One FoundTV per IP from (service, ip, port, instance) records; pairing first."""
+    port_open = port_open or _port_open
+    tvs, connect_ports = {}, {}
+    for service, ip, port, instance in records:
+        tv = tvs.setdefault(ip, FoundTV(ip))
+        if service == NAME_SERVICE:
+            tv.name = instance
+        elif service == CONNECT_SERVICE:
+            connect_ports.setdefault(ip, []).append(port)
+        elif service == PAIRING_SERVICE:
+            tv.pair_port = port
+    for tv in tvs.values():
+        # mDNS can keep announcing an old port for a while after the TV moved
+        # on, so use one that's really open. Older TVs (adb tcpip) use 5555.
+        # The pairing port isn't probed: a stray connection could count as a
+        # failed pairing attempt on the TV.
+        candidates = dict.fromkeys(connect_ports.get(tv.ip, []) + [LEGACY_PORT])
+        tv.connect_port = next((port for port in candidates if port_open(tv.ip, port)), "")
+    return sorted(tvs.values(), key=lambda tv: (not tv.pair_port, not tv.connect_port,
+                                                 (tv.name or "~").lower(), tv.ip))
+
+
+class _ZeroconfBrowser:
+    """Browses the TV services with python-zeroconf, if it's installed and allowed."""
+
+    def __init__(self):
+        from zeroconf import IPVersion, ServiceBrowser, Zeroconf
+        self.names = set()
+        self._lock = threading.Lock()  # zeroconf calls _changed from its own thread
+        self.zc = Zeroconf(ip_version=IPVersion.V4Only)
+        types = [f"{s}.local." for s in (NAME_SERVICE, CONNECT_SERVICE, PAIRING_SERVICE)]
+        try:
+            ServiceBrowser(self.zc, types, handlers=[self._changed])
+        except Exception:
+            self.zc.close()
+            raise
+
+    def _changed(self, zeroconf, service_type, name, state_change):
+        with self._lock:
+            if state_change.name == "Removed":
+                self.names.discard((service_type, name))
+            else:
+                self.names.add((service_type, name))
+
+    def records(self):
+        with self._lock:
+            names = list(self.names)
+        found = []
+        for service_type, name in names:
+            info = self.zc.get_service_info(service_type, name, timeout=1000)
+            if not info:
+                continue
+            instance = name[: -len(service_type) - 1]
+            for ip in info.parsed_addresses():
+                if is_valid_ip(ip) and is_valid_port(str(info.port)):
+                    found.append((service_type[: -len(".local.")], ip, str(info.port), instance))
+        return found
+
+    def close(self):
+        self.zc.close()
+
+
+def find_tvs(browser=None):
+    """TVs adb and zeroconf can see right now."""
+    records = parse_mdns_services(run_adb("mdns", "services", timeout=10)[0])
+    if browser:
+        try:
+            records += browser.records()
+        except Exception:  # zeroconf trouble must never break connecting by hand
+            pass
+    return merge_found_tvs(records)
+
+
+class TVFinder:
+    """Keeps .tvs up to date in a background thread while a window is open.
+
+    Windows poll .tvs from their own loop, so no Tk calls happen off the main
+    thread and closing a window mid-search is safe.
+    """
+
+    def __init__(self, interval=3):
+        self.tvs = []
+        self.searched = False  # set after the first full search
+        self._interval = interval
+        self._stop = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        try:
+            browser = _ZeroconfBrowser()
+        except Exception:  # not installed, or the firewall said no: adb alone
+            browser = None
+        wait = 1.5  # adb answers at once; zeroconf's first answers take a moment
+        try:
+            while not self._stop.is_set():
+                try:
+                    self.tvs = find_tvs(browser)
+                except Exception:  # keep searching; typing an address still works
+                    pass
+                self.searched = True
+                self._stop.wait(wait)
+                wait = self._interval
+        finally:
+            if browser:
+                browser.close()
+
+
+def _show_found_tvs(window, finder, shown):
+    """Refresh the -TVS- list if the finder's results changed; returns what's shown."""
+    tvs = list(finder.tvs)
+    if tvs != shown:
+        selected = window["-TVS-"].get()
+        window["-TVS-"].update(values=tvs)
+        ips = [tv.ip for tv in tvs]
+        if selected and selected[0].ip in ips:
+            window["-TVS-"].update(set_to_index=ips.index(selected[0].ip))
+    if finder.searched:
+        window["-FOUND-"].update("" if tvs else
+                                 "No TVs found automatically. Check the TV is on and on the same "
+                                 "network, or type its address below.")
+    return tvs
+
+
+def _autofill(window, auto, key, value):
+    """Fill (or clear) a field unless the user has typed their own value into it."""
+    current = window[key].get().strip()
+    if current in ("", auto.get(key)) and current != value:
+        window[key].update(value)
+        auto[key] = value
+
+
 DONE = "-ADB-DONE-"
 
 
@@ -502,9 +695,18 @@ def _pair_then_connect(ip, pair_port, code, debug_port):
                          "Check the debug port shown under 'IP address & Port' on your TV.")
 
 
+def _tv_list():
+    return [
+        [sg.Text("TVs on your network (click one):")],
+        [sg.Listbox([], key="-TVS-", size=(70, 4), enable_events=True)],
+        [sg.Text("Searching…", key="-FOUND-", size=(70, 2))],
+    ]
+
+
 def pair_and_connect():
     """Android 11+ / Chromecast: pair with a code first, then connect."""
-    layout = [
+    layout = _tv_list() + [
+        [sg.HorizontalSeparator()],
         [sg.Text("Step 1 — Pairing (TV: Developer options → Wireless debugging → Pair device with pairing code)")],
         [sg.Text("TV IP Address:"), sg.InputText(state.ip, key="IP", size=(20, 1))],
         [sg.Text("Pairing Port: "), sg.InputText(key="PAIR_PORT", size=(10, 1))],
@@ -517,12 +719,42 @@ def pair_and_connect():
     ]
     window = sg.Window("Pair & Connect (Android 11+ / Chromecast)", layout, modal=True,
                        enable_close_attempted_event=True)
+    finder = TVFinder().start()
+    auto, shown = {"IP": state.ip}, []
     while True:
-        event, values = window.read()
+        event, values = window.read(timeout=500)
         if should_close(event, window):
             break
+        if event == "-TVS-" and values["-TVS-"] and not window.metadata:
+            tv = values["-TVS-"][0]
+            for key, value in (("IP", tv.ip), ("PAIR_PORT", tv.pair_port), ("DEBUG_PORT", tv.connect_port)):
+                window[key].update(value)
+                auto[key] = value
+            window["-STATUS-"].update(
+                "Enter the 6-digit code shown on the TV." if tv.pair_port else
+                "On the TV, open Developer options → Wireless debugging → Pair device with pairing code. "
+                "The pairing port fills in by itself.")
+        elif event == sg.TIMEOUT_EVENT and not window.metadata:
+            shown = _show_found_tvs(window, finder, shown)
+            # When a TV's pairing screen opens, fill in its address and ports so
+            # only the code is left to type. Hands off once the user types an IP.
+            ip = values["IP"].strip()
+            pairing = [tv for tv in shown if tv.pair_port]
+            tv = None
+            if ip in ("", auto.get("IP")):
+                tv = (pairing[0] if len(pairing) == 1 else
+                      next((tv for tv in shown if tv.ip == ip), None))
+            if tv:
+                had_pair_port = bool(values["PAIR_PORT"].strip())
+                _autofill(window, auto, "IP", tv.ip)
+                _autofill(window, auto, "PAIR_PORT", tv.pair_port)
+                _autofill(window, auto, "DEBUG_PORT", tv.connect_port)
+                if tv.pair_port and not had_pair_port and window["PAIR_PORT"].get() == tv.pair_port:
+                    window["-STATUS-"].update(f"Found the pairing screen on {tv.name or tv.ip}. "
+                                              "Enter the 6-digit code shown on the TV.")
+                    window["PAIR_CODE"].set_focus()
         # Enter can still fire the button while it's disabled for a running job.
-        if event == "Pair & Connect" and not window.metadata:
+        elif event == "Pair & Connect" and not window.metadata:
             ip = values["IP"].strip()
             pair_port = values["PAIR_PORT"].strip()
             pair_code = values["PAIR_CODE"].strip()
@@ -549,40 +781,66 @@ def pair_and_connect():
                 break
             window["-STATUS-"].update(message)
             background_done(window)
+    finder.stop()
     window.close()
 
 
 def connect_to_tv():
-    layout = [
-        [sg.Text("Enter TV IP Address (add :port if it isn't 5555, e.g. 192.168.1.100:5555):")],
-        [sg.InputText(state.target if state.ip else "", key="IP")],
+    initial = state.target if state.ip else ""
+    layout = _tv_list() + [
+        [sg.Text("TV IP Address (add :port if it isn't 5555, e.g. 192.168.1.100:5555):")],
+        [sg.InputText(initial, key="IP")],
         [sg.Text("", key="-STATUS-", size=(70, 6))],
         [sg.Button("Connect", bind_return_key=True), sg.Button("Cancel")],
     ]
     window = sg.Window("Connect to TV", layout, modal=True, enable_close_attempted_event=True)
+    finder = TVFinder().start()
+    auto, shown = {"IP": initial}, []
     while True:
-        event, values = window.read()
+        event, values = window.read(timeout=500)
         if should_close(event, window):
             break
-        if event == "Connect" and not window.metadata:
+        if event == "-TVS-" and values["-TVS-"] and not window.metadata:
+            tv = values["-TVS-"][0]
+            auto["IP"] = f"{tv.ip}:{tv.connect_port}" if tv.connect_port else tv.ip
+            window["IP"].update(auto["IP"])
+            window["-STATUS-"].update(
+                "" if tv.connect_port else
+                "⚠️ This TV isn't ready to connect. On a Chromecast or Android 11+ TV, use "
+                "Pair & Connect. On older TVs, turn on network (ADB) debugging in Developer options.")
+        elif event == sg.TIMEOUT_EVENT and not window.metadata:
+            shown = _show_found_tvs(window, finder, shown)
+            # Wireless debugging picks a new port each time it's turned on, so
+            # keep a remembered address current. Hands off once the user types.
+            address = values["IP"].strip()
+            ip = address.partition(":")[0]
+            ready = [tv for tv in shown if tv.connect_port]
+            tv = next((tv for tv in ready if tv.ip == ip), None)
+            if not tv and len(ready) == 1:
+                tv = ready[0]
+            if tv and address in ("", auto.get("IP")) and address != f"{tv.ip}:{tv.connect_port}":
+                _autofill(window, auto, "IP", f"{tv.ip}:{tv.connect_port}")
+                window["-STATUS-"].update("")
+        elif event == "Connect" and not window.metadata:
             # Fix 2: validate IP before using it in any command
             parsed = parse_target(values["IP"])
             if not parsed:
                 window["-STATUS-"].update("❌ Invalid address. Enter an IPv4 address (e.g. 192.168.1.100), "
                                           "optionally with a port (e.g. 192.168.1.100:5555).")
                 continue
-            # Always set the port too, so one from an earlier Pair & Connect isn't reused.
-            state.ip, state.port = parsed
-            target = state.target
+            target = "{}:{}".format(*parsed)
             run_in_background(window, lambda: adb_connect(target), "-STATUS-", f"Connecting to {target}…")
         elif event == DONE:
             ok, detail = values[DONE]
             state.connected = ok
             if ok:
+                # Always set the port too, so one from an earlier Pair & Connect isn't reused.
+                state.ip, state.port = parsed
                 break
             window["-STATUS-"].update(f"❌ Failed to connect.\n{detail}\n"
                                       "If the TV shows an 'Allow USB debugging?' prompt, accept it and try again.")
             background_done(window)
+    finder.stop()
     window.close()
 
 

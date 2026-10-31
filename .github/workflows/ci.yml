@@ -197,6 +197,7 @@ jobs:
           test -d "dist/Android TV Toolkit.app"
           codesign --verify --deep --strict "dist/Android TV Toolkit.app"
           lipo -archs "dist/Android TV Toolkit.app/Contents/MacOS/Android TV Toolkit"
+          plutil -extract NSLocalNetworkUsageDescription raw "dist/Android TV Toolkit.app/Contents/Info.plist"
 
       - name: Smoke test macOS application bundle
         shell: bash
