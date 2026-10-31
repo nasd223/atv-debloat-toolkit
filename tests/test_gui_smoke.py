@@ -64,3 +64,63 @@ def rendered(monkeypatch):
 def test_window_opens(rendered, dialog):
     getattr(run_toolkit, dialog)()
     assert len(rendered) == 1
+
+
+def test_main_menu_greys_out_tv_actions_until_connected(rendered, monkeypatch):
+    """TV-only buttons start disabled and are enabled once an action connects."""
+    run_toolkit.state.connected = False
+    snapshots = []
+    events = iter(["Connect to TV", sg.WINDOW_CLOSED])
+    real_read = sg.Window.read
+
+    def read(self, timeout=None, **kwargs):
+        real_read(self, timeout=100)
+        snapshots.append(({name for _, names in run_toolkit.MENU for name in names
+                           if self[name].Widget.instate(["disabled"])}, self["-CONN-"].get()))
+        return next(events), {}
+
+    def fake_connect():
+        run_toolkit.state.connected = True
+
+    monkeypatch.setattr(sg.Window, "read", read)
+    monkeypatch.setitem(run_toolkit.main_menu.__globals__, "connect_to_tv", fake_connect)
+    run_toolkit.main_menu()
+    (disabled_before, status_before), (disabled_after, status_after) = snapshots
+    assert disabled_before == run_toolkit.NEEDS_TV and status_before.startswith("⚪")
+    assert disabled_after == set() and status_after.startswith("✅ Connected")
+
+
+def test_debloat_checkbox_shows_package_and_tooltip(rendered, monkeypatch):
+    read_once = sg.Window.read
+    checkboxes = {}
+
+    def fake_read(self, timeout=None, **kwargs):
+        read_once(self)
+        for el in self.element_list():
+            if isinstance(el, sg.Checkbox):
+                checkboxes[el.Key] = el
+        return sg.WINDOW_CLOSED, {}
+
+    monkeypatch.setattr(sg.Window, "read", fake_read)
+    run_toolkit.advanced_debloat()
+    for label, pkg, risk in run_toolkit.apps:
+        assert checkboxes[pkg].Text.startswith(f"{risk} {label}  ({pkg})")
+        assert checkboxes[pkg].Tooltip == pkg
+
+
+def test_reenable_select_and_deselect_all(rendered, monkeypatch):
+    read_once = sg.Window.read
+    events = iter(["Select All", "Deselect All", sg.WINDOW_CLOSED])
+    states = []
+
+    def fake_read(self, timeout=None, **kwargs):
+        read_once(self)
+        cks = [el for el in self.element_list() if isinstance(el, sg.Checkbox)]
+        states.append([ck.get() for ck in cks])
+        return next(events), {}
+
+    monkeypatch.setattr(sg.Window, "read", fake_read)
+    run_toolkit.reenable_apps()
+    assert states[0] and not any(states[0])
+    assert all(states[1])
+    assert not any(states[2])

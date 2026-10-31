@@ -38,6 +38,12 @@ if _problem:
 
 import FreeSimpleGUI as sg
 
+# Follow the OS look (incl. macOS dark mode) instead of FreeSimpleGUI's blue
+# theme, and use the system UI font rather than its fixed Helvetica 10.
+sg.theme("SystemDefaultForReal")
+sg.set_options(font="TkDefaultFont", use_ttk_buttons=True,
+               ttk_theme="aqua" if sys.platform == "darwin" else None)
+
 IS_WINDOWS = sys.platform == "win32"
 ADB_NAME = "adb.exe" if IS_WINDOWS else "adb"
 
@@ -468,6 +474,14 @@ def run_in_background(window, fn, status_key, message):
     window.perform_long_operation(fn, DONE)
 
 
+def background_done(window):
+    """Re-enable a window's buttons after a run_in_background job it survives."""
+    for el in window.element_list():
+        if isinstance(el, sg.Button):
+            el.update(disabled=False)
+    window.metadata = False
+
+
 def should_close(event, window):
     """Close on Cancel/X, but ignore the X while a background job is running."""
     if event == sg.WINDOW_CLOSE_ATTEMPTED_EVENT and window.metadata:
@@ -475,88 +489,100 @@ def should_close(event, window):
     return event in (sg.WINDOW_CLOSED, sg.WINDOW_CLOSE_ATTEMPTED_EVENT, "Cancel")
 
 
+def _pair_then_connect(ip, pair_port, code, debug_port):
+    """Returns (paired, connected, message) for pair_and_connect."""
+    stdout, stderr = adb_pair(f"{ip}:{pair_port}", code)
+    if not pair_succeeded(stdout):
+        return False, False, (f"❌ Pairing failed.\n{friendly_adb_error(stderr or stdout)}\n"
+                              "Check the IP, port, and code shown on your TV.")
+    ok, detail = adb_connect(f"{ip}:{debug_port}")
+    if ok:
+        return True, True, ""
+    return True, False, (f"⚠️ Paired OK but connection failed.\n{detail}\n"
+                         "Check the debug port shown under 'IP address & Port' on your TV.")
+
+
 def pair_and_connect():
     """Android 11+ / Chromecast: pair with a code first, then connect."""
     layout = [
         [sg.Text("Step 1 — Pairing (TV: Developer options → Wireless debugging → Pair device with pairing code)")],
-        [sg.Text("TV IP Address:"), sg.InputText(key="IP", size=(20, 1))],
+        [sg.Text("TV IP Address:"), sg.InputText(state.ip, key="IP", size=(20, 1))],
         [sg.Text("Pairing Port: "), sg.InputText(key="PAIR_PORT", size=(10, 1))],
         [sg.Text("Pairing Code: "), sg.InputText(key="PAIR_CODE", size=(15, 1))],
         [sg.HorizontalSeparator()],
         [sg.Text("Step 2 — Connection port (shown under 'IP address & Port' on the Wireless debugging screen)")],
         [sg.Text("Debug Port:   "), sg.InputText(key="DEBUG_PORT", size=(10, 1))],
-        [sg.Button("Pair & Connect"), sg.Button("Cancel")],
+        [sg.Text("", key="-STATUS-", size=(80, 6))],
+        [sg.Button("Pair & Connect", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Pair & Connect (Android 11+ / Chromecast)", layout, modal=True)
+    window = sg.Window("Pair & Connect (Android 11+ / Chromecast)", layout, modal=True,
+                       enable_close_attempted_event=True)
     while True:
         event, values = window.read()
-        if event in (sg.WINDOW_CLOSED, "Cancel"):
+        if should_close(event, window):
             break
-        if event == "Pair & Connect":
+        # Enter can still fire the button while it's disabled for a running job.
+        if event == "Pair & Connect" and not window.metadata:
             ip = values["IP"].strip()
             pair_port = values["PAIR_PORT"].strip()
             pair_code = values["PAIR_CODE"].strip()
             debug_port = values["DEBUG_PORT"].strip()
 
             if not is_valid_ip(ip):
-                sg.popup("❌ Invalid IP address. Enter a valid IPv4 address (e.g. 192.168.1.100).")
+                window["-STATUS-"].update("❌ Invalid IP address. Enter a valid IPv4 address (e.g. 192.168.1.100).")
                 continue
             if not is_valid_port(pair_port) or not is_valid_port(debug_port):
-                sg.popup("❌ Enter both ports as numbers between 1 and 65535.\n\n"
-                         "Wireless debugging uses a different, random port for pairing and for connecting.")
+                window["-STATUS-"].update("❌ Enter both ports as numbers between 1 and 65535.\n"
+                                          "Wireless debugging uses a different, random port for pairing and for connecting.")
                 continue
             if not pair_code:
-                sg.popup("❌ Pairing code cannot be empty.")
+                window["-STATUS-"].update("❌ Pairing code cannot be empty.")
                 continue
-
-            # Step 1: pair
-            stdout, stderr = adb_pair(f"{ip}:{pair_port}", pair_code)
-            if not pair_succeeded(stdout):
-                sg.popup(f"❌ Pairing failed.\n\n{friendly_adb_error(stderr or stdout)}\n\n"
-                         "Check the IP, port, and code shown on your TV.")
-                continue
-
-            # Step 2: connect
-            state.ip, state.port = ip, debug_port
-            ok, detail = adb_connect(state.target)
+            run_in_background(window, lambda: _pair_then_connect(ip, pair_port, pair_code, debug_port),
+                              "-STATUS-", "Pairing…")
+        elif event == DONE:
+            paired, ok, message = values[DONE]
+            if paired:
+                state.ip, state.port = ip, debug_port
             state.connected = ok
             if ok:
-                sg.popup(f"✅ Paired and connected to {state.target} successfully!")
-            else:
-                sg.popup(f"⚠️ Paired OK but connection failed.\n\n{detail}\n\n"
-                         "Check the debug port shown under 'IP address & Port' on your TV.")
-            break
+                break
+            window["-STATUS-"].update(message)
+            background_done(window)
     window.close()
 
 
 def connect_to_tv():
     layout = [
         [sg.Text("Enter TV IP Address (add :port if it isn't 5555, e.g. 192.168.1.100:5555):")],
-        [sg.InputText(key="IP")],
-        [sg.Button("Connect"), sg.Button("Cancel")],
+        [sg.InputText(state.target if state.ip else "", key="IP")],
+        [sg.Text("", key="-STATUS-", size=(70, 6))],
+        [sg.Button("Connect", bind_return_key=True), sg.Button("Cancel")],
     ]
-    window = sg.Window("Connect to TV", layout, modal=True)
+    window = sg.Window("Connect to TV", layout, modal=True, enable_close_attempted_event=True)
     while True:
         event, values = window.read()
-        if event in (sg.WINDOW_CLOSED, "Cancel"):
+        if should_close(event, window):
             break
-        if event == "Connect":
+        if event == "Connect" and not window.metadata:
             # Fix 2: validate IP before using it in any command
             parsed = parse_target(values["IP"])
             if not parsed:
-                sg.popup("❌ Invalid address. Enter an IPv4 address (e.g. 192.168.1.100), "
-                         "optionally with a port (e.g. 192.168.1.100:5555).")
+                window["-STATUS-"].update("❌ Invalid address. Enter an IPv4 address (e.g. 192.168.1.100), "
+                                          "optionally with a port (e.g. 192.168.1.100:5555).")
                 continue
             # Always set the port too, so one from an earlier Pair & Connect isn't reused.
             state.ip, state.port = parsed
-            ok, detail = adb_connect(state.target)
+            target = state.target
+            run_in_background(window, lambda: adb_connect(target), "-STATUS-", f"Connecting to {target}…")
+        elif event == DONE:
+            ok, detail = values[DONE]
             state.connected = ok
             if ok:
-                sg.popup(f"✅ Connected to {state.target} successfully!")
-            else:
-                sg.popup(f"❌ Failed to connect.\n\n{detail}\n\n"
-                         "If the TV shows an 'Allow USB debugging?' prompt, accept it and try again.")
-            break
+                break
+            window["-STATUS-"].update(f"❌ Failed to connect.\n{detail}\n"
+                                      "If the TV shows an 'Allow USB debugging?' prompt, accept it and try again.")
+            background_done(window)
     window.close()
 
 
@@ -674,19 +700,19 @@ def _debloat_window(title, header, entries, preselect):
         return pkg in enabled
 
     checkbox_layout = [
-        [sg.Checkbox(f"{risk + ' ' if risk else ''}{label}{suffix(pkg)}", key=pkg,
+        [sg.Checkbox(f"{risk + ' ' if risk else ''}{label}  ({pkg}){suffix(pkg)}", key=pkg, tooltip=pkg,
                      default=available(pkg) and preselect(risk), disabled=not available(pkg))]
         for label, pkg, risk in entries
     ]
     layout = [
         *header,
-        [sg.Column(checkbox_layout, scrollable=True, vertical_scroll_only=True, size=(500, 400))],
+        [sg.Column(checkbox_layout, scrollable=True, vertical_scroll_only=True, size=(500, 400),
+                   expand_x=True, expand_y=True)],
         [sg.Button("Select All Safe Apps"), sg.Button("Deselect All")],
         [sg.Text("", key="-STATUS-", size=(50, 1))],
         [sg.Button("Apply Selected Changes"), sg.Button("Cancel")],
     ]
-    window = sg.Window(title, layout, modal=True, enable_close_attempted_event=True,
-                       size=(560, 500), resizable=True)
+    window = sg.Window(title, layout, modal=True, enable_close_attempted_event=True, resizable=True)
     while True:
         event, values = window.read()
         if should_close(event, window):
@@ -763,6 +789,7 @@ def reenable_apps():
         [sg.Text("Disabled apps on this TV (apps this toolkit knows are listed first):")],
         [sg.Column(checkbox_layout, scrollable=True, vertical_scroll_only=True, size=(560, 400))],
         [sg.Text("", key="-STATUS-", size=(50, 1))],
+        [sg.Button("Select All"), sg.Button("Deselect All")],
         [sg.Button("Re-enable Selected"), sg.Button("Cancel")],
     ]
     window = sg.Window("Re-enable Apps", layout, modal=True, enable_close_attempted_event=True)
@@ -784,7 +811,10 @@ def reenable_apps():
         event, values = window.read()
         if should_close(event, window):
             break
-        if event == "Re-enable Selected":
+        if event in ("Select All", "Deselect All"):
+            for pkg in ordered:
+                window[pkg].update(value=event == "Select All")
+        elif event == "Re-enable Selected":
             selected = [pkg for pkg in ordered if values.get(pkg)]
             if not selected:
                 sg.popup("No apps selected.")
@@ -820,8 +850,20 @@ def show_safe_debloat_list():
     sg.popup_scrolled("\n".join(lines), title="Apps Disabled in Safe Debloat Mode", size=(80, 30))
 
 
+# Main menu buttons, grouped; NEEDS_TV ones stay greyed out until connected.
+MENU = [
+    ("1. Connect", ["Connect to TV", "Pair & Connect (Android 11+ / Chromecast)"]),
+    ("2. Debloat & restore", ["Safe Debloat", "Advanced Debloat", "Re-enable Apps"]),
+    ("3. Tools", ["Install APK", "Disable Google TV Launcher", "Reboot TV", "View Safe Debloat App List"]),
+]
+NEEDS_TV = {"Safe Debloat", "Advanced Debloat", "Re-enable Apps", "Install APK",
+            "Disable Google TV Launcher", "Reboot TV"}
+
+
 def _status_text():
-    return f"Connected: {state.target}" if state.connected else "Not connected"
+    if state.connected:
+        return f"✅ Connected: {state.target}"
+    return "⚪ Not connected — connect to a TV first"
 
 
 def main_menu():
@@ -838,8 +880,10 @@ def main_menu():
         "View Safe Debloat App List": show_safe_debloat_list,
     }
     layout = [
-        [sg.Text(_status_text(), key="-CONN-", size=(36, 1))],
-        *[[sg.Button(name)] for name in actions],
+        [sg.Text(_status_text(), key="-CONN-", size=(40, 1))],
+        *[[sg.Frame(group, [[sg.Button(name, expand_x=True, disabled=name in NEEDS_TV and not state.connected)]
+                            for name in names], expand_x=True)]
+          for group, names in MENU],
         [sg.Button("Exit")],
     ]
     window = sg.Window("Android TV Toolkit v1.3", layout, finalize=True)
@@ -855,6 +899,8 @@ def main_menu():
             except AdbError as e:
                 sg.popup(f"❌ {e}\n\nCheck the TV is still on and connected, then try again.")
         window["-CONN-"].update(_status_text())
+        for name in NEEDS_TV:
+            window[name].update(disabled=not state.connected)
     window.close()
 
 
