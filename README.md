@@ -14,6 +14,55 @@ Built using Python and FreeSimpleGUI.
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/main-window.png" alt="Main window, connected to a TV" width="360">
+  &nbsp;
+  <img src="docs/screenshots/advanced-debloat.png" alt="Advanced Debloat with risk levels and package names" width="470">
+</p>
+<p align="center">
+  <img src="docs/screenshots/connect.png" alt="Connect to TV dialog" width="560">
+</p>
+
+*macOS, dark mode. The TV address shown is an example.*
+
+---
+
+## About this fork
+
+This is a fork of [seun-novodev/android-tv-debloat-toolkit](https://github.com/seun-novodev/android-tv-debloat-toolkit). It is kept in sync with the original, including its one-click ADB download on Windows and resizable debloat windows. On top of that it adds:
+
+**Runs on macOS and Linux, not just Windows**
+- Finds `adb` on its own: the `ADB_PATH` environment variable, the `adb/` folder, `PATH`, Homebrew, and Android Studio's `platform-tools`. On macOS/Linux, a missing `adb` shows the right install command.
+- A double-click launcher for macOS (`run_toolkit.command`) that sets up its own Python environment, plus an optional script to build a Mac app (`build_macos_app.sh`).
+- A clear message instead of a freeze or crash when Python's Tk is too old or missing (Apple's built-in Python, Homebrew without `python-tk`).
+- Uses [FreeSimpleGUI](https://github.com/spyoungtech/FreeSimpleGUI), the free fork of PySimpleGUI, so there is no licence prompt and it works with Tk 9.
+
+**A clearer, safer interface**
+- The main window groups actions into *Connect*, *Debloat & restore* and *Tools*, shows whether a TV is connected, and greys out TV actions until one is.
+- Connect and Pair & Connect show errors in the window and let you correct the address instead of closing.
+- Debloat lists show each app's package name, grey out apps that aren't on the TV, and ask before touching Critical apps. Afterwards you see what really happened to each app (disabled, already disabled, not installed, or protected by Android).
+- Long ADB operations run in the background, so windows don't freeze.
+- Native look on macOS, including dark mode.
+
+**New features**
+- **Re-enable Apps:** undo any debloat, with Select All / Deselect All.
+- **Reboot TV.**
+- **Disable Google TV Launcher** covers both the Google TV and Android TV launchers, and refuses unless another launcher is installed, so you can't lock yourself out.
+
+**Bug fixes**
+- **Install APK** works on Android 11 and later (`adb install -r` instead of `push` + `pm install`).
+- **Failed connections** are no longer reported as success. Unauthorised connections get a hint to accept "Allow debugging?" on the TV.
+- **Pair & Connect** restarts a stuck ADB server and retries once when pairing fails with "protocol fault".
+
+**Tests and CI**
+- 108 automated tests that need no TV. GitHub Actions runs them on Windows, Linux and macOS (Apple Silicon and Intel) with Python 3.10 and 3.14, and checks that the Windows `.exe` and macOS `.app` build and start.
+
+These changes have been offered to the original project in [PR #16](https://github.com/seun-novodev/android-tv-debloat-toolkit/pull/16).
+
+---
+
 ## Features
 - Connect to Android TV over Wi-Fi (ADB Wireless)
 - Pair & Connect for Android 11+ / Chromecast with Google TV (Wireless Debugging)
