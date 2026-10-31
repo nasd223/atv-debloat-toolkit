@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import zipfile
 
 import pytest
@@ -688,3 +689,123 @@ def test_pair_then_connect(monkeypatch, pair_out, connect_ok, expected):
     assert (paired, ok) == expected[:2]
     assert message.startswith(expected[2])
     assert connects == (["1.2.3.4:40000"] if paired else [])
+
+
+# --- Finding TVs ----------------------------------------------------------------
+
+MDNS_SERVICES = (
+    "List of discovered mdns services\n"
+    "adb-2A311HFDD7T9QR-3yFymd\t_adb-tls-connect._tcp\t192.168.86.102:39903\n"
+    "adb-2A311HFDD7T9QR-3yFymd\t_adb-tls-pairing._tcp.\t192.168.86.102:37099\n"
+    "adb-OLD\t_adb._tcp\t[fe80::1]:5555\n"
+    "\n"
+)
+
+
+def test_parse_mdns_services():
+    assert run_toolkit.parse_mdns_services(MDNS_SERVICES) == [
+        ("_adb-tls-connect._tcp", "192.168.86.102", "39903", "adb-2A311HFDD7T9QR-3yFymd"),
+        ("_adb-tls-pairing._tcp", "192.168.86.102", "37099", "adb-2A311HFDD7T9QR-3yFymd"),
+    ]
+
+
+def test_merge_found_tvs_one_entry_per_tv():
+    records = [
+        ("_androidtvremote2._tcp", "10.0.0.2", "6466", "Den TV"),
+        ("_androidtvremote2._tcp", "10.0.0.3", "6466", "Grandma Tv"),
+        ("_adb-tls-connect._tcp", "10.0.0.3", "39903", "adb-X"),
+        ("_adb-tls-connect._tcp", "10.0.0.3", "39903", "adb-X"),  # adb and zeroconf both saw it
+        ("_adb-tls-pairing._tcp", "10.0.0.4", "37000", "adb-Y"),
+    ]
+    tvs = run_toolkit.merge_found_tvs(records, port_open=lambda ip, port: port != "5555")
+    assert [(tv.ip, tv.name, tv.connect_port, tv.pair_port) for tv in tvs] == [
+        ("10.0.0.4", "", "", "37000"),            # pairing screen open: first
+        ("10.0.0.3", "Grandma Tv", "39903", ""),  # ready to connect
+        ("10.0.0.2", "Den TV", "", ""),           # debugging off
+    ]
+    assert [str(tv).split("—")[-1].strip() for tv in tvs] == [
+        "ready to pair", "ready to connect", "debugging is off"]
+    assert str(tvs[1]).startswith("Grandma Tv  (10.0.0.3)")
+    assert str(tvs[0]).startswith("Android TV  (10.0.0.4)")
+
+
+def test_merge_found_tvs_drops_stale_port_and_finds_legacy_5555():
+    records = [
+        ("_androidtvremote2._tcp", "10.0.0.2", "6466", "Old TV"),
+        ("_adb-tls-connect._tcp", "10.0.0.3", "39903", "adb-X"),
+    ]
+    open_ports = {("10.0.0.2", "5555")}  # 10.0.0.3 stopped listening on 39903
+    tvs = run_toolkit.merge_found_tvs(records, port_open=lambda ip, port: (ip, port) in open_ports)
+    assert {tv.ip: tv.connect_port for tv in tvs} == {"10.0.0.2": "5555", "10.0.0.3": ""}
+
+
+def test_find_tvs_merges_adb_and_zeroconf_and_survives_zeroconf_errors(monkeypatch):
+    monkeypatch.setattr(run_toolkit, "run_adb", lambda *a, **k: (MDNS_SERVICES, "", 0))
+    monkeypatch.setattr(run_toolkit, "_port_open", lambda ip, port, timeout=0.3: True)
+
+    class Browser:
+        def records(self):
+            return [("_androidtvremote2._tcp", "192.168.86.102", "6466", "Grandma Tv")]
+
+    class BrokenBrowser:
+        def records(self):
+            raise OSError("network is down")
+
+    (tv,) = run_toolkit.find_tvs(Browser())
+    assert (tv.name, tv.connect_port, tv.pair_port) == ("Grandma Tv", "39903", "37099")
+    (tv,) = run_toolkit.find_tvs(BrokenBrowser())
+    assert (tv.name, tv.connect_port) == ("", "39903")
+
+
+def test_tv_finder_without_zeroconf_uses_adb(monkeypatch):
+    def no_zeroconf():
+        raise ImportError("No module named 'zeroconf'")
+
+    found = [run_toolkit.FoundTV("10.0.0.3", connect_port="39903")]
+    monkeypatch.setattr(run_toolkit, "_ZeroconfBrowser", no_zeroconf)
+    monkeypatch.setattr(run_toolkit, "find_tvs", lambda browser: found if browser is None else [])
+    finder = run_toolkit.TVFinder(interval=0.01).start()
+    try:
+        for _ in range(200):
+            if finder.searched:
+                break
+            time.sleep(0.01)
+        assert finder.tvs == found
+    finally:
+        finder.stop()
+
+
+def test_parse_mdns_services_keeps_names_with_spaces():
+    assert run_toolkit.parse_mdns_services("Living Room TV\t_androidtvremote2._tcp.\t10.0.0.5:6466\n") == [
+        ("_androidtvremote2._tcp", "10.0.0.5", "6466", "Living Room TV")]
+
+
+def test_merge_found_tvs_prefers_the_open_port_when_sources_disagree():
+    records = [("_adb-tls-connect._tcp", "10.0.0.3", "41000", "adb-X"),   # live, from adb
+               ("_adb-tls-connect._tcp", "10.0.0.3", "39000", "adb-X")]   # stale, cached by zeroconf
+    (tv,) = run_toolkit.merge_found_tvs(records, port_open=lambda ip, port: port == "41000")
+    assert tv.connect_port == "41000"
+
+
+def test_tv_finder_keeps_going_after_an_error(monkeypatch):
+    calls = []
+
+    def flaky(browser):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("bad record")
+        return [run_toolkit.FoundTV("10.0.0.3")]
+
+    monkeypatch.setattr(run_toolkit, "_ZeroconfBrowser", lambda: None)
+    monkeypatch.setattr(run_toolkit, "find_tvs", flaky)
+    finder = run_toolkit.TVFinder(interval=0.01)
+    monkeypatch.setattr(finder._stop, "wait", lambda seconds: time.sleep(0.01))
+    finder.start()
+    try:
+        for _ in range(200):
+            if finder.tvs:
+                break
+            time.sleep(0.01)
+        assert finder.tvs == [run_toolkit.FoundTV("10.0.0.3")]
+    finally:
+        finder.stop()

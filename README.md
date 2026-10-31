@@ -40,6 +40,7 @@ This is a fork of [seun-novodev/android-tv-debloat-toolkit](https://github.com/s
 - Uses [FreeSimpleGUI](https://github.com/spyoungtech/FreeSimpleGUI), the free fork of PySimpleGUI, so there is no licence prompt and it works with Tk 9.
 
 **A clearer, safer interface**
+- **Finds your TVs:** Connect and Pair & Connect list the Android/Google TVs on your network by name (e.g. "Living Room TV") and whether each is ready to connect, ready to pair, or has debugging off. Click one to fill in its address. When you open the pairing screen on the TV, the IP and both ports fill in by themselves, so you only type the 6-digit code. When you open Connect to TV, a remembered TV whose Wireless debugging port has changed gets its new port. Older TVs that use port 5555 are found too, as long as they announce their name on the network (Google TV and most Android TVs do).
 - The main window groups actions into *Connect*, *Debloat & restore* and *Tools*, shows whether a TV is connected, and greys out TV actions until one is.
 - Connect and Pair & Connect show errors in the window and let you correct the address instead of closing.
 - Debloat lists show each app's package name, grey out apps that aren't on the TV, and ask before touching Critical apps. Afterwards you see what really happened to each app (disabled, already disabled, not installed, or protected by Android).
@@ -57,13 +58,14 @@ This is a fork of [seun-novodev/android-tv-debloat-toolkit](https://github.com/s
 - **Pair & Connect** restarts a stuck ADB server and retries once when pairing fails with "protocol fault".
 
 **Tests and CI**
-- 108 automated tests that need no TV. GitHub Actions runs them on Windows, Linux and macOS (Apple Silicon and Intel) with Python 3.10 and 3.14, and checks that the Windows `.exe` and macOS `.app` build and start.
+- 123 automated tests that need no TV. GitHub Actions runs them on Windows, Linux and macOS (Apple Silicon and Intel) with Python 3.10 and 3.14, and checks that the Windows `.exe` and macOS `.app` build and start.
 
 These changes have been offered to the original project in [PR #16](https://github.com/seun-novodev/android-tv-debloat-toolkit/pull/16).
 
 ---
 
 ## Features
+- Finds Android TVs on your network by name, so you don't have to type an IP address or port
 - Connect to Android TV over Wi-Fi (ADB Wireless)
 - Pair & Connect for Android 11+ / Chromecast with Google TV (Wireless Debugging)
 - Debloat TCL and Google bloatware (apps are disabled, not uninstalled — fully reversible)
@@ -207,12 +209,14 @@ python3 -m venv .venv
 
 ### Step 7 -- Connect and use
 
+Both connect windows list the TVs found on your network, with their names. Click one to fill in its address. If your TV isn't listed (some networks, such as guest Wi-Fi, block this), type its address as below.
+
 **Standard Android TV (TCL, Onn, Nvidia Shield):**
-1. Click **Connect to TV** and enter your TV's IP address (find it under **Settings -> Network -> About**). If your TV uses a port other than 5555, enter it as `IP:port`.
+1. Click **Connect to TV** and pick your TV, or enter its IP address (find it under **Settings -> Network -> About**). If your TV uses a port other than 5555, enter it as `IP:port`.
 
 **Android 11+ / Chromecast with Google TV:**
 1. Enable **Wireless Debugging** in Developer Options (separate from ADB Debugging).
-2. Click **Pair & Connect (Android 11+ / Chromecast)** and fill in the IP, Pairing Port, Pairing Code, and Debug Port shown on your TV's Wireless Debugging screen. The pairing port and the debug port are different, and both change each time -- a TV restart also turns Wireless Debugging off.
+2. Click **Pair & Connect (Android 11+ / Chromecast)**, then on the TV open **Wireless debugging -> Pair device with pairing code**. The IP and both ports fill in by themselves; type the 6-digit code and press **Pair & Connect**. (You can also type the IP, Pairing Port, Pairing Code, and Debug Port from the TV's screen. The pairing port and the debug port are different, and both change each time -- a TV restart also turns Wireless Debugging off.)
 
 Then choose a function:
 - **Safe Debloat** -- recommended first run; disables common bloatware. Apps that aren't on your TV are greyed out.
@@ -273,6 +277,12 @@ Or if using the toolkit's local adb folder:
 ```
 chmod +x adb/adb
 ```
+
+**My TV isn't in the list of TVs found:**
+- Make sure the TV is on (not asleep) and on the same network as your computer. Guest Wi-Fi and some mesh or "AP isolation" settings block the announcements the toolkit listens for; type the address instead.
+- **Windows:** if Windows Firewall asked about Python or the toolkit, allow it on private networks.
+- **macOS:** if you denied "find devices on your local network", turn it back on in **System Settings -> Privacy & Security -> Local Network**.
+- Python 3.8 or 3.9: finding TVs by name needs Python 3.10+. With older Python, only TVs with Wireless debugging turned on are listed.
 
 **"Failed to connect" / "connection refused":**
 - Make sure ADB Debugging is enabled on the TV

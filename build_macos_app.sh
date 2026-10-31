@@ -27,6 +27,12 @@ rm -rf build "dist/Android TV Toolkit.app"
     --osx-bundle-identifier io.github.nasd223.atvtoolkit \
     run_toolkit.py
 
+# Apps need this key to use the local network (finding TVs, and adb reaching
+# them); without it macOS blocks the traffic instead of asking. Apple TN3179.
+plutil -replace NSLocalNetworkUsageDescription -string \
+    "Finds Android TVs on your network and connects to them." \
+    "dist/Android TV Toolkit.app/Contents/Info.plist"
+
 # PyInstaller ad-hoc signs on Apple Silicon; re-sign the finished bundle so the
 # signature covers everything (needed for it to launch on arm64).
 codesign --force --deep --sign - "dist/Android TV Toolkit.app"
